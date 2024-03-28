@@ -1,0 +1,15 @@
+[package]
+name = "chafka"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.81"
+clickhouse-rs = "1.1.0-alpha.1"
+rdkafka = "0.36.2"
+serde = "1.0.197"
+serde_json = "1.0.115"
+tokio = { version = "1.37.0", features = ["time", "rt-multi-thread", "macros"] }
+uuid = { version = "1.8.0", features = ["serde"] }
