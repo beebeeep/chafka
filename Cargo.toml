@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.81"
+apache-avro = "0.16.0"
 clickhouse-rs = "1.1.0-alpha.1"
 rdkafka = "0.36.2"
 serde = "1.0.197"

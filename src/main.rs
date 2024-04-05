@@ -1,30 +1,36 @@
-use clickhouse_rs::{row, types::Block, Pool};
+use clickhouse_rs::{types::Block, Pool};
+use ingester::{example, Ingester, Row};
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
     ClientConfig, Message, Offset, TopicPartitionList,
 };
-use serde::Deserialize;
 use std::{collections::HashMap, time::Duration};
-use uuid::Uuid;
 
-async fn insert_batch(pool: &Pool, batch: &Vec<Vec<u8>>) -> Result<(), anyhow::Error> {
+mod ingester;
+
+async fn insert_batch(pool: &Pool, batch: Vec<Row>) -> Result<(), anyhow::Error> {
+    if batch.len() == 0 {
+        return Ok(());
+    }
+
     let mut ch = pool.get_handle().await?;
     let mut block = Block::with_capacity(batch.len());
     for msg in batch {
-        let row: MyRow = serde_json::from_slice(msg)?;
-        block.push(row! {id: row.key, v: row.value})?;
+        block.push(msg)?;
     }
     ch.insert("test_chafka", block).await?;
     Ok(())
 }
 
-async fn get_batch(consumer: &StreamConsumer) -> (TopicPartitionList, Vec<Vec<u8>>) {
-    let mut batch: Vec<Vec<u8>> = Vec::new();
+async fn get_batch(
+    consumer: &StreamConsumer,
+    ingester: &impl Ingester,
+) -> (TopicPartitionList, Vec<Row>) {
+    let mut batch: Vec<Row> = Vec::new();
     let mut topic_map: HashMap<(String, i32), Offset> = HashMap::new();
     while batch.len() < 10 {
         match tokio::time::timeout(Duration::from_secs(3), consumer.recv()).await {
-            Err(e) => {
-                eprintln!("got timeout: {e}");
+            Err(_) => {
                 break;
             }
             Ok(Err(e)) => {
@@ -41,8 +47,12 @@ async fn get_batch(consumer: &StreamConsumer) -> (TopicPartitionList, Vec<Vec<u8
                     }
                     _ => None,
                 };
-
-                batch.push(msg.payload().unwrap().to_owned());
+                match ingester.decode(msg.payload().unwrap()) {
+                    Ok(row) => batch.push(row),
+                    Err(err) => {
+                        eprintln!("failed to decode message: {}", err)
+                    }
+                };
             }
         }
     }
@@ -64,19 +74,20 @@ async fn main() {
         .expect("Consumer creation failed");
     consumer.subscribe(&["test-topic"]).unwrap();
     let pool = Pool::new("tcp://localhost:9000");
+    let example_ingester = example::Ingester {};
 
     loop {
-        let (tpl, batch) = get_batch(&consumer).await;
-        for msg in &batch {
-            println!("got message: {}", String::from_utf8_lossy(msg));
-        }
-        if batch.is_empty() {
+        let (tpl, batch) = get_batch(&consumer, &example_ingester).await;
+        if tpl.count() == 0 {
             continue;
         }
-        match insert_batch(&pool, &batch).await {
-            Ok(()) => consumer
-                .commit(&tpl, rdkafka::consumer::CommitMode::Sync)
-                .unwrap_or_else(|e| eprintln!("failed to commit offsets: {e}")),
+        match insert_batch(&pool, batch).await {
+            Ok(()) => {
+                eprintln!("committing offsets: {:?}", tpl);
+                consumer
+                    .commit(&tpl, rdkafka::consumer::CommitMode::Sync)
+                    .unwrap_or_else(|e| eprintln!("failed to commit offsets: {e}"))
+            }
             Err(e) => eprintln!("inserting batch: {}", e),
         }
     }
