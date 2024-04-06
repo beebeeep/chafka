@@ -12,13 +12,13 @@ pub fn from_schema(schema: String) -> Result<Ingester, anyhow::Error> {
     })
 }
 
-impl super::Ingester for Ingester {
+impl super::Decoder for Ingester {
     fn get_name(&self) -> String {
         String::from("avro")
     }
 
     fn decode(&self, message: &[u8]) -> Result<Row, anyhow::Error> {
-        let reader = Reader::with_schema(&self.schema, &message[..])?;
+        let reader = Reader::with_schema(&self.schema, message)?;
         for record in reader {
             match record? {
                 Value::Null => println!("value null"),

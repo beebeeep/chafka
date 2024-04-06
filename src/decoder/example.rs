@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use super::Row;
 
-pub struct Ingester;
+pub struct Decoder;
 
 #[derive(Deserialize)]
 struct Entry {
@@ -12,7 +12,7 @@ struct Entry {
     pub value: i64,
 }
 
-impl super::Ingester for Ingester {
+impl super::Decoder for Decoder {
     fn get_name(&self) -> String {
         String::from("example-ingester")
     }

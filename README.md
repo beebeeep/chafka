@@ -10,7 +10,7 @@ providing full control over schema and deserialization process.
 
 Architecture
 ============
-Conceptually, service consists of two main components - the ingestion core, responsible for consuming messages from Kafka and writing data to ClickHouse; and one or several "ingesters" - packages implementing a
+Conceptually, service consists of two main components - the ingestion core, responsible for consuming messages from Kafka and writing data to ClickHouse; and one or several "decoders" - packages implementing a
 simple interface to unmarshal message from Kafka into set of ClickHouse columns. Out of the box there is a universal configurable Avro ingester, and you also may add your own. 
 
 Status
