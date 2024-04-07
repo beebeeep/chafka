@@ -1,45 +1,61 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc},
+    time::Duration,
+};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context, Result};
 use clickhouse_rs::{Block, Pool};
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
-    Message, Offset, TopicPartitionList,
+    ClientConfig, Message, Offset, TopicPartitionList,
 };
 use tokio::time::sleep;
 
-use crate::decoder::{Decoder, Row};
+use crate::{
+    decoder::{self, Decoder, Row},
+    settings,
+};
 
 const CH_BACKOFF: std::time::Duration = Duration::from_secs(1);
 
-pub struct Ingester<T: Decoder> {
+pub struct Ingester {
     batch: Vec<Row>,
     batch_size: usize,
     batch_timeout: Duration,
     pool: Pool,
     consumer: StreamConsumer,
-    decoder: T,
+    decoder: Arc<dyn Decoder + Send + Sync>,
+    table: String,
+    topic: String,
 }
 
-impl<T: Decoder> Ingester<T> {
-    pub fn new(
-        batch_size: usize,
-        batch_timeout: Duration,
-        pool: Pool,
-        consumer: StreamConsumer,
-        decoder: T,
-    ) -> Ingester<T> {
-        Ingester {
+impl Ingester {
+    pub fn new(cfg: settings::Ingester) -> Result<Self> {
+        let decoder = decoder::get_decoder(&cfg.decoder).context("loading decoder")?;
+        let consumer: StreamConsumer = ClientConfig::new()
+            .set("bootstrap.servers", cfg.kafka_broker)
+            .set("session.timeout.ms", "6000")
+            .set("enable.auto.commit", "false")
+            .set("auto.offset.reset", "earliest")
+            .set("group.id", cfg.consumer_group.unwrap())
+            .create()
+            .context("creating kafka consumer")?;
+        let pool = Pool::new(cfg.clickhouse_url);
+        Ok(Ingester {
             batch: Vec::new(),
-            batch_size,
-            batch_timeout,
+            batch_size: cfg.batch_size.unwrap(),
+            batch_timeout: Duration::from_secs(cfg.batch_timeout_seconds.unwrap()),
             pool,
             consumer,
             decoder,
-        }
+            topic: cfg.topic,
+            table: cfg.clickhouse_table,
+        })
     }
 
     pub async fn start(&mut self) {
+        self.consumer.subscribe(&[&self.topic]).unwrap();
         loop {
             let tpl = self.get_batch().await;
             if tpl.count() + self.batch.len() == 0 {
@@ -77,7 +93,7 @@ impl<T: Decoder> Ingester<T> {
         for msg in &self.batch {
             block.push(msg.to_owned())?;
         }
-        match ch.insert("test_chafka", block).await {
+        match ch.insert(&self.table, block).await {
             Ok(_) => {
                 self.batch.truncate(0);
                 Ok(())

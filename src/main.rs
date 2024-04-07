@@ -1,33 +1,36 @@
-use clickhouse_rs::Pool;
-use decoder::example;
+use clap::Parser;
+
+
 use ingester::Ingester;
-use rdkafka::{
-    consumer::{Consumer, StreamConsumer},
-    ClientConfig,
+
+use settings::Settings;
+
+use tokio::{
+    task::{JoinSet},
 };
-use std::time::Duration;
 
 pub mod decoder;
 pub mod ingester;
+pub mod settings;
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(short, long)]
+    config: String,
+}
 
 #[tokio::main]
 async fn main() {
-    let consumer: StreamConsumer = ClientConfig::new()
-        .set("bootstrap.servers", "localhost:9091")
-        .set("session.timeout.ms", "6000")
-        .set("enable.auto.commit", "false")
-        .set("auto.offset.reset", "earliest")
-        .set("group.id", "chafka")
-        .create()
-        .expect("Consumer creation failed");
-    consumer.subscribe(&["test-topic"]).unwrap();
-    let pool = Pool::new("tcp://localhost:9000");
-    let mut ingester = Ingester::new(
-        10,
-        Duration::from_secs(10),
-        pool,
-        consumer,
-        example::Decoder {},
-    );
-    ingester.start().await;
+    let args = Args::parse();
+    let settings = Settings::new(&args.config).expect("cannot load config");
+    let mut ingesters = JoinSet::new();
+    for (name, cfg) in settings.ingesters {
+        ingesters.spawn(async move {
+            let mut ingester =
+                Ingester::new(cfg).unwrap_or_else(|_| panic!("failed to create ingester {name}"));
+            ingester.start().await;
+        });
+    }
+    while let Some(_) = ingesters.join_next().await {}
 }
