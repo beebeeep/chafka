@@ -1,4 +1,10 @@
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
+use anyhow::anyhow;
 use apache_avro::{types::Value, Reader, Schema};
+use chrono::{DateTime};
+use clickhouse_rs::types::{Value as CHValue};
+
 
 use super::Row;
 
@@ -18,35 +24,75 @@ impl super::Decoder for Ingester {
     }
 
     fn decode(&self, message: &[u8]) -> Result<Row, anyhow::Error> {
-        let reader = Reader::with_schema(&self.schema, message)?;
-        for record in reader {
-            match record? {
-                Value::Null => println!("value null"),
-                Value::Boolean(x) => println!("value Boolean: {x}"),
-                Value::Int(x) => println!("value Int: {x}"),
-                Value::Long(x) => println!("value Long: {x}"),
-                Value::Float(x) => println!("value Float: {x}"),
-                Value::Double(x) => println!("value Double: {x}"),
-                Value::Bytes(x) => println!("value Bytes: {:?}", x),
-                Value::String(x) => println!("value String: {x}"),
-                Value::Fixed(x, y) => println!("value Fixed: {x} {:?}", y),
-                Value::Enum(x, y) => println!("value Enum: {x} {y}"),
-                Value::Union(x, y) => println!("value Union: {x} {:?}", y),
-                Value::Array(x) => println!("value Array: {:?}", x),
-                Value::Map(x) => println!("value Map: {:?}", x),
-                Value::Record(x) => println!("value Record: {:?}", x),
-                Value::Date(x) => println!("value Date: {x}"),
-                Value::Decimal(x) => println!("value Decimal: {:?}", x),
-                Value::TimeMillis(x) => println!("value TimeMillis: {x}"),
-                Value::TimeMicros(x) => println!("value TimeMicros: {x}"),
-                Value::TimestampMillis(x) => println!("value TimestampMillis: {x}"),
-                Value::TimestampMicros(x) => println!("value TimestampMicros: {x}"),
-                Value::LocalTimestampMillis(x) => println!("value LocalTimestampMillis: {x}"),
-                Value::LocalTimestampMicros(x) => println!("value LocalTimestampMicros: {x}"),
-                Value::Duration(x) => println!("value Duration: {:?}", x),
-                Value::Uuid(x) => println!("value Uuid: {x}"),
-            }
+        let mut reader = Reader::with_schema(&self.schema, message)?;
+        let record;
+        let mut row = Row::new();
+        match reader.next() {
+            Some(Ok(Value::Record(x))) => record = x,
+            Some(Ok(_)) => return Err(anyhow!("avro message must be a record")),
+            Some(Err(e)) => return Err(anyhow!("avro unmarshalling: {e}")),
+            None => todo!(),
+        };
+        for (column, value) in record {
+            let v = avro2ch(value)?;
+            row.push((column, v));
         }
-        todo!();
+        Ok(row)
+    }
+}
+
+fn avro2ch(v: Value) -> Result<CHValue, anyhow::Error> {
+    match v {
+        Value::Null => Err(anyhow!("unexpected null")),
+        Value::Record(_) => Err(anyhow!("unsupported nested record")),
+        Value::Boolean(x) => Ok(CHValue::from(x)),
+        Value::Int(x) => Ok(CHValue::from(x)),
+        Value::Long(x) => Ok(CHValue::from(x)),
+        Value::Float(x) => Ok(CHValue::from(x)),
+        Value::Double(x) => Ok(CHValue::from(x)),
+        Value::Bytes(x) => Ok(CHValue::from(x)),
+        Value::String(x) => Ok(CHValue::from(x)),
+        Value::Fixed(_, x) => Ok(CHValue::String(Arc::new(x))),
+        Value::Enum(_, y) => Ok(CHValue::from(y)),
+        Value::Union(_, _) => todo!("nullables not implemented"),
+        Value::Array(x) => {
+            let mut arr: Vec<i32> = Vec::new();
+            for elem in x {
+                arr.push(match elem {
+                    Value::Int(v) => v,
+                    _ => 0,
+                })
+            }
+            Ok(CHValue::from(arr))
+        }
+        Value::Map(x) => {
+            let mut m: HashMap<String, i32> = HashMap::new();
+            for (k, v) in x {
+                if let Value::Int(elem) = v {
+                    m.insert(k, elem);
+                }
+            }
+            Ok(CHValue::from(m))
+        }
+        Value::Date(x) => Ok(CHValue::Date(x as u16)),
+        Value::Decimal(_) => Err(anyhow!("unsupported decimal type")),
+        Value::TimeMillis(x) => Ok(CHValue::from(x)),
+        Value::TimeMicros(x) => Ok(CHValue::from(x)),
+        Value::TimestampMillis(x) => Ok(CHValue::from(DateTime::from_timestamp_millis(x).unwrap())),
+        Value::TimestampMicros(x) => Ok(CHValue::from(DateTime::from_timestamp_micros(x).unwrap())),
+        Value::LocalTimestampMillis(x) => {
+            Ok(CHValue::from(DateTime::from_timestamp_millis(x).unwrap()))
+        }
+        Value::LocalTimestampMicros(x) => {
+            Ok(CHValue::from(DateTime::from_timestamp_micros(x).unwrap()))
+        }
+        Value::Duration(x) => {
+            // don't ask, programmers and time ¯\_(ツ)_/¯
+            let duration = Duration::from_millis(u32::from(x.millis()) as u64)
+                + Duration::from_secs(86400 * u32::from(x.days()) as u64)
+                + Duration::from_secs(30 * 86400 * u32::from(x.months()) as u64);
+            Ok(CHValue::from(duration.as_millis() as u64))
+        }
+        Value::Uuid(x) => Ok(CHValue::from(x)),
     }
 }

@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc},
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use clickhouse_rs::{Block, Pool};
