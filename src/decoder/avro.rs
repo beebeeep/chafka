@@ -1,37 +1,34 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, io::BufReader, sync::Arc, time::Duration};
 
 use anyhow::anyhow;
-use apache_avro::{types::Value, Reader, Schema};
-use chrono::{DateTime};
-use clickhouse_rs::types::{Value as CHValue};
-
+use apache_avro::{from_avro_datum, types::Value, Schema};
+use chrono::DateTime;
+use clickhouse_rs::types::Value as CHValue;
 
 use super::Row;
 
-pub struct Ingester {
+pub struct Decoder {
     schema: Schema,
 }
 
-pub fn from_schema(schema: String) -> Result<Ingester, anyhow::Error> {
-    Ok(Ingester {
+pub fn from_schema(schema: String) -> Result<Decoder, anyhow::Error> {
+    Ok(Decoder {
         schema: Schema::parse_str(&schema)?,
     })
 }
 
-impl super::Decoder for Ingester {
+impl super::Decoder for Decoder {
     fn get_name(&self) -> String {
         String::from("avro")
     }
 
     fn decode(&self, message: &[u8]) -> Result<Row, anyhow::Error> {
-        let mut reader = Reader::with_schema(&self.schema, message)?;
+        let mut datum = BufReader::new(&message[5..]);
         let record;
         let mut row = Row::new();
-        match reader.next() {
-            Some(Ok(Value::Record(x))) => record = x,
-            Some(Ok(_)) => return Err(anyhow!("avro message must be a record")),
-            Some(Err(e)) => return Err(anyhow!("avro unmarshalling: {e}")),
-            None => todo!(),
+        match from_avro_datum(&self.schema, &mut datum, None)? {
+            Value::Record(x) => record = x,
+            _ => return Err(anyhow!("avro message must be a record")),
         };
         for (column, value) in record {
             let v = avro2ch(value)?;
@@ -56,14 +53,14 @@ fn avro2ch(v: Value) -> Result<CHValue, anyhow::Error> {
         Value::Enum(_, y) => Ok(CHValue::from(y)),
         Value::Union(_, _) => todo!("nullables not implemented"),
         Value::Array(x) => {
-            let mut arr: Vec<i32> = Vec::new();
+            let mut arr: Vec<CHValue> = Vec::new();
             for elem in x {
-                arr.push(match elem {
-                    Value::Int(v) => v,
-                    _ => 0,
-                })
+                arr.push(avro2ch(elem)?)
             }
-            Ok(CHValue::from(arr))
+            Ok(CHValue::Array(
+                &clickhouse_rs::types::SqlType::Int32,
+                Arc::new(arr),
+            ))
         }
         Value::Map(x) => {
             let mut m: HashMap<String, i32> = HashMap::new();

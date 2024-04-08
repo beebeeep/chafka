@@ -1,13 +1,10 @@
 use clap::Parser;
 
-
 use ingester::Ingester;
 
 use settings::Settings;
 
-use tokio::{
-    task::{JoinSet},
-};
+use tokio::task::JoinSet;
 
 pub mod decoder;
 pub mod ingester;
@@ -27,8 +24,8 @@ async fn main() {
     let mut ingesters = JoinSet::new();
     for (name, cfg) in settings.ingesters {
         ingesters.spawn(async move {
-            let mut ingester =
-                Ingester::new(cfg).unwrap_or_else(|_| panic!("failed to create ingester {name}"));
+            let mut ingester = Ingester::new(cfg)
+                .unwrap_or_else(|e| panic!("failed to create ingester {name}: {e}"));
             ingester.start().await;
         });
     }

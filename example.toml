@@ -1,8 +1,8 @@
 [ingesters.example]
-decoder = "example"
+decoder = "avro"
 kafka_broker = "localhost:9091"
 topic = "test-topic"
-batch_size = 10
+batch_size = 1000
 batch_timeout_seconds = 10
 clickhouse_url = "tcp://localhost:9000"
-clickhouse_table = "test_chafka"
+clickhouse_table = "test_chafka_avro"

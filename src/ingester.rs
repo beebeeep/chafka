@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{anyhow, Context, Result};
 use clickhouse_rs::{Block, Pool};
@@ -51,11 +55,25 @@ impl Ingester {
     }
 
     pub async fn start(&mut self) {
+        let mut count: usize = 0;
+        let mut start = Instant::now();
         self.consumer.subscribe(&[&self.topic]).unwrap();
         loop {
             let tpl = self.get_batch().await;
             if tpl.count() + self.batch.len() == 0 {
                 continue;
+            }
+            count += self.batch.len();
+            if count >= 10000 {
+                let elapsed = Instant::now() - start;
+                eprintln!(
+                    "processed {} messages in {} sec at rate {} msg/sec",
+                    count,
+                    elapsed.as_secs_f64(),
+                    (count as f64) / elapsed.as_secs_f64(),
+                );
+                count = 0;
+                start = Instant::now();
             }
             self.try_insert(tpl).await;
         }
