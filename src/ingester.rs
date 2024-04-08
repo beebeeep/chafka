@@ -64,7 +64,7 @@ impl Ingester {
                 continue;
             }
             count += self.batch.len();
-            if count >= 10000 {
+            if count >= 100000 {
                 let elapsed = Instant::now() - start;
                 eprintln!(
                     "processed {} messages in {} sec at rate {} msg/sec",
