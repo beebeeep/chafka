@@ -9,6 +9,7 @@ edition = "2021"
 anyhow = "1.0.81"
 apache-avro = "0.16.0"
 chrono = "0.4.37"
+chrono-tz = "^0.8"
 clap = { version = "4.5.4", features = ["derive"] }
 clickhouse-rs = "1.1.0-alpha.1"
 config = "0.14.0"

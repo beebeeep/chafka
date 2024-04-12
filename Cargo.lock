@@ -235,6 +235,7 @@ dependencies = [
  "anyhow",
  "apache-avro",
  "chrono",
+ "chrono-tz",
  "clap",
  "clickhouse-rs",
  "config",

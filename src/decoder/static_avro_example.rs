@@ -2,16 +2,15 @@ use std::io::BufReader;
 
 use apache_avro::{from_avro_datum, from_value, Schema};
 use clickhouse_rs::types::Value;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-
-use super::Row;
+use super::{Row, CONFLUENT_HEADER_LEN};
 
 pub struct Decoder {
     schema: Schema,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Deserialize)]
 struct Entry {
     a: i64,
     b: String,
@@ -38,10 +37,10 @@ pub fn new() -> Result<Decoder, anyhow::Error> {
 
 impl super::Decoder for Decoder {
     fn get_name(&self) -> String {
-        String::from("test-avro")
+        String::from("static-avro-example")
     }
     fn decode(&self, message: &[u8]) -> Result<Row, anyhow::Error> {
-        let mut datum = BufReader::new(&message[5..]);
+        let mut datum = BufReader::new(&message[CONFLUENT_HEADER_LEN..]);
         let v = from_avro_datum(&self.schema, &mut datum, None)?;
         let r: Entry = from_value::<Entry>(&v)?;
         Ok(vec![

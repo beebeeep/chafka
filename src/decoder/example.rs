@@ -14,7 +14,7 @@ struct Entry {
 
 impl super::Decoder for Decoder {
     fn get_name(&self) -> String {
-        String::from("example-ingester")
+        String::from("example")
     }
     fn decode(&self, message: &[u8]) -> Result<Row, anyhow::Error> {
         let r: Entry = serde_json::from_slice(message)?;

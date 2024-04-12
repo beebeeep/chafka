@@ -1,12 +1,14 @@
 pub mod avro;
 pub mod example;
-pub mod testavro;
+pub mod static_avro_example;
 
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 
 use clickhouse_rs::types::Value;
+
+pub const CONFLUENT_HEADER_LEN: usize = 5;
 
 pub type Row = Vec<(String, Value)>;
 pub trait Decoder {
@@ -31,7 +33,7 @@ pub fn get_decoder(name: &str) -> Result<Arc<dyn Decoder + Send + Sync>> {
     match name {
         "example" => Ok(Arc::new(example::Decoder {})),
         "avro" => Ok(Arc::new(avro::from_schema(schema)?)),
-        "test-avro" => Ok(Arc::new(testavro::new()?)),
+        "test-avro" => Ok(Arc::new(static_avro_example::new()?)),
         _ => Err(anyhow!("unknown decoder {}", name)),
     }
 }
