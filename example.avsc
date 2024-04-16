@@ -1,0 +1,22 @@
+{
+  "type": "record",
+  "name": "test",
+  "fields": [
+    {
+      "name": "a",
+      "type": "long",
+      "default": 42
+    },
+    {
+      "name": "b",
+      "type": "string"
+    },
+    {
+      "name": "c",
+      "type": {
+        "type": "array",
+        "items": "int"
+      }
+    }
+  ]
+}

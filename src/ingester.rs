@@ -31,8 +31,10 @@ pub struct Ingester {
 }
 
 impl Ingester {
-    pub fn new(cfg: settings::Ingester) -> Result<Self> {
-        let decoder = decoder::get_decoder(&cfg.decoder).context("loading decoder")?;
+    pub async fn new(cfg: settings::Ingester) -> Result<Self> {
+        let decoder = decoder::get_decoder(&cfg.decoder, cfg.custom, &cfg.topic)
+            .await
+            .with_context(|| format!("loading decoder"))?;
         let consumer: StreamConsumer = ClientConfig::new()
             .set("bootstrap.servers", cfg.kafka_broker)
             .set("session.timeout.ms", "6000")

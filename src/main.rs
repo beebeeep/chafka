@@ -25,7 +25,8 @@ async fn main() {
     for (name, cfg) in settings.ingesters {
         ingesters.spawn(async move {
             let mut ingester = Ingester::new(cfg)
-                .unwrap_or_else(|e| panic!("failed to create ingester {name}: {e}"));
+                .await
+                .unwrap_or_else(|e| panic!("failed to create ingester {name}: {:#}", e));
             ingester.start().await;
         });
     }

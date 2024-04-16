@@ -16,23 +16,17 @@ pub trait Decoder {
     fn decode(&self, message: &[u8]) -> Result<Row, anyhow::Error>;
 }
 
-pub fn get_decoder(name: &str) -> Result<Arc<dyn Decoder + Send + Sync>> {
-    let schema = String::from(
-        r#"
-    {
-        "type": "record",
-        "name": "test",
-        "fields": [
-            {"name": "a", "type": "long", "default": 42},
-            {"name": "b", "type": "string"},
-            {"name": "c", "type": {"type": "array", "items": "int"}}
-        ]
-    }
-"#,
-    );
+pub async fn get_decoder(
+    name: &str,
+    decoder_settings: Option<toml::Value>,
+    topic: &str,
+) -> Result<Arc<dyn Decoder + Send + Sync>, anyhow::Error> {
     match name {
         "example" => Ok(Arc::new(example::Decoder {})),
-        "avro" => Ok(Arc::new(avro::from_schema(schema)?)),
+        "avro" => match decoder_settings {
+            Some(s) => Ok(Arc::new(avro::new(topic, s.try_into()?).await?)),
+            None => Err(anyhow!("avro config missing")),
+        },
         "test-avro" => Ok(Arc::new(static_avro_example::new()?)),
         _ => Err(anyhow!("unknown decoder {}", name)),
     }

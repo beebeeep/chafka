@@ -1,20 +1,35 @@
-use std::{collections::HashMap, io::BufReader, sync::Arc, time::Duration};
+use std::{any, collections::HashMap, fs, io::BufReader, sync::Arc, time::Duration};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Result};
+
 use apache_avro::{from_avro_datum, schema::RecordSchema, types::Value, Schema};
 use chrono::DateTime;
 use chrono_tz;
 
 use clickhouse_rs::types::{DateTimeType, SqlType, Value as CHValue};
+use reqwest::Url;
+use schema_registry_api::{SchemaRegistry, SchemaVersion, SubjectName};
+use serde::Deserialize;
 
 use super::{Row, CONFLUENT_HEADER_LEN};
+
+#[derive(Deserialize)]
+pub struct Settings {
+    pub field_names: Option<HashMap<String, String>>,
+    pub include_fields: Option<Vec<String>>,
+    pub exclude_fields: Option<Vec<String>>,
+    pub schema_file: Option<String>,
+    pub registry_url: Option<String>,
+}
 
 pub struct Decoder {
     schema: Schema,
     array_types: TypeMapping,
     map_types: TypeMapping,
+    settings: Settings,
 }
-fn get_pod_sqltype(s: &Schema) -> Result<&'static SqlType, anyhow::Error> {
+
+fn get_pod_sqltype(s: &Schema) -> Result<&'static SqlType> {
     match s {
         Schema::Boolean => Ok(&SqlType::Bool),
         Schema::Int => Ok(&SqlType::Int32),
@@ -51,7 +66,7 @@ fn get_pod_sqltype(s: &Schema) -> Result<&'static SqlType, anyhow::Error> {
 struct TypeMapping(Vec<(String, &'static SqlType)>);
 
 impl TypeMapping {
-    fn new(r: &RecordSchema) -> Result<(Self, Self), anyhow::Error> {
+    fn new(r: &RecordSchema) -> Result<(Self, Self)> {
         let mut map_types: Vec<(String, &SqlType)> = Vec::new();
         let mut arr_types: Vec<(String, &SqlType)> = Vec::new();
         for field in &r.fields {
@@ -72,8 +87,8 @@ impl TypeMapping {
     }
 }
 
-pub fn from_schema(schema_str: String) -> Result<Decoder, anyhow::Error> {
-    let schema = Schema::parse_str(&schema_str)?;
+pub async fn new(topic: &str, settings: Settings) -> Result<Decoder> {
+    let schema = get_schema(&topic, &settings).await?;
     match schema {
         Schema::Record(record) => {
             let (array_types, map_types) = TypeMapping::new(&record)?;
@@ -81,6 +96,7 @@ pub fn from_schema(schema_str: String) -> Result<Decoder, anyhow::Error> {
                 array_types,
                 map_types,
                 schema: Schema::Record(record),
+                settings: settings,
             })
         }
         _ => Err(anyhow!("avro schema root must be a record")),
@@ -150,7 +166,7 @@ impl super::Decoder for Decoder {
         String::from("avro")
     }
 
-    fn decode(&self, message: &[u8]) -> Result<Row, anyhow::Error> {
+    fn decode(&self, message: &[u8]) -> Result<Row> {
         let mut datum = BufReader::new(&message[CONFLUENT_HEADER_LEN..]);
         let record;
         let mut row = Row::new();
@@ -163,5 +179,26 @@ impl super::Decoder for Decoder {
             row.push((column, v));
         }
         Ok(row)
+    }
+}
+
+pub async fn get_schema(topic: &str, settings: &Settings) -> Result<Schema> {
+    match &settings.schema_file {
+        Some(f) => Ok(Schema::parse_str(&fs::read_to_string(f)?)?),
+        None => match &settings.registry_url {
+            None => Err(anyhow!("registry_url or schema_file must be specified")),
+            Some(registry_url) => {
+                let sr_client = SchemaRegistry::build_default(Url::parse(&registry_url)?)?;
+                let subject_name = format!("{topic}-value").parse::<SubjectName>()?;
+                let subject = sr_client
+                    .subject()
+                    .version(&subject_name, SchemaVersion::Latest)
+                    .await?;
+                match subject {
+                    None => Err(anyhow!("subject {} not found", subject_name)),
+                    Some(s) => Ok(Schema::parse_str(&s.schema)?),
+                }
+            }
+        },
     }
 }
