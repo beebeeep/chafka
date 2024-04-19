@@ -27,6 +27,7 @@ pub struct Decoder {
     array_types: TypeMapping,
     map_types: TypeMapping,
     settings: Settings,
+    name_overrides: Vec<(String, String)>,
 }
 
 struct TypeMapping(Vec<(String, &'static SqlType)>);
@@ -115,12 +116,9 @@ impl super::Decoder for Decoder {
                 }
             }
             let v = self.avro2ch(&column, value)?;
-            let column_name = match &self.settings.field_names {
+            let column_name = match self.name_overrides.iter().find(|m| m.0 == column) {
                 None => column,
-                Some(mapping) => match mapping.get(&column) {
-                    None => column,
-                    Some(c) => c.clone(),
-                },
+                Some((_, n)) => n.to_owned(),
             };
             row.push((column_name, v));
         }
@@ -152,6 +150,12 @@ impl TypeMapping {
 
 pub async fn new(topic: &str, settings: Settings) -> Result<Decoder> {
     let schema = get_schema(&topic, &settings).await?;
+    let mut name_overrides: Vec<(String, String)> = Vec::new();
+    if let Some(names) = &settings.field_names {
+        names
+            .iter()
+            .for_each(|(k, v)| name_overrides.push((k.to_owned(), v.to_owned())));
+    }
     match schema {
         Schema::Record(record) => {
             let (array_types, map_types) = TypeMapping::new(&record)?;
@@ -160,6 +164,7 @@ pub async fn new(topic: &str, settings: Settings) -> Result<Decoder> {
                 map_types,
                 schema: Schema::Record(record),
                 settings: settings,
+                name_overrides,
             })
         }
         _ => Err(anyhow!("avro schema root must be a record")),
