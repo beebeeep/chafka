@@ -7,4 +7,5 @@ batch_timeout_seconds = 10
 clickhouse_url = "tcp://localhost:9000"
 clickhouse_table = "test_chafka_avro"
 custom.schema_file = "./example.avsc"
+custom.field_names = { c = "c_arr" }
 

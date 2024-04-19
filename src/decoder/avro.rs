@@ -1,4 +1,4 @@
-use std::{any, collections::HashMap, fs, io::BufReader, sync::Arc, time::Duration};
+use std::{collections::HashMap, fs, io::BufReader, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Result};
 
@@ -29,79 +29,8 @@ pub struct Decoder {
     settings: Settings,
 }
 
-fn get_pod_sqltype(s: &Schema) -> Result<&'static SqlType> {
-    match s {
-        Schema::Boolean => Ok(&SqlType::Bool),
-        Schema::Int => Ok(&SqlType::Int32),
-        Schema::Long => Ok(&SqlType::Int64),
-        Schema::Float => Ok(&SqlType::Float32),
-        Schema::Double => Ok(&SqlType::Float64),
-        Schema::Bytes => Ok(&SqlType::String),
-        Schema::String => Ok(&SqlType::String),
-        Schema::Uuid => Ok(&SqlType::Uuid),
-        //Schema::Fixed(s) => Ok(&SqlType::FixedString(s.size)),
-        Schema::Date => Ok(&SqlType::Date),
-        Schema::TimeMillis => Ok(&SqlType::Int32),
-        Schema::TimeMicros => Ok(&SqlType::Int64),
-        Schema::TimestampMillis => Ok(&SqlType::DateTime(DateTimeType::DateTime64(
-            3,
-            chrono_tz::UTC,
-        ))),
-        Schema::TimestampMicros => Ok(&SqlType::DateTime(DateTimeType::DateTime64(
-            6,
-            chrono_tz::UTC,
-        ))),
-        Schema::LocalTimestampMillis => Ok(&SqlType::DateTime(DateTimeType::DateTime64(
-            3,
-            chrono_tz::UTC,
-        ))),
-        Schema::LocalTimestampMicros => Ok(&SqlType::DateTime(DateTimeType::DateTime64(
-            6,
-            chrono_tz::UTC,
-        ))),
-        Schema::Duration => Ok(&SqlType::Int64),
-        _ => Err(anyhow!("unsupported type")),
-    }
-}
 struct TypeMapping(Vec<(String, &'static SqlType)>);
 
-impl TypeMapping {
-    fn new(r: &RecordSchema) -> Result<(Self, Self)> {
-        let mut map_types: Vec<(String, &SqlType)> = Vec::new();
-        let mut arr_types: Vec<(String, &SqlType)> = Vec::new();
-        for field in &r.fields {
-            match &field.schema {
-                Schema::Array(v) => arr_types.push((field.name.clone(), get_pod_sqltype(v)?)),
-                Schema::Map(v) => map_types.push((field.name.clone(), get_pod_sqltype(v)?)),
-                _ => (),
-            };
-        }
-        Ok((TypeMapping(arr_types), TypeMapping(map_types)))
-    }
-
-    fn get_type(&self, column: &str) -> Option<&'static SqlType> {
-        match self.0.iter().find(|x| x.0 == column) {
-            None => None,
-            Some((_, t)) => Some(t),
-        }
-    }
-}
-
-pub async fn new(topic: &str, settings: Settings) -> Result<Decoder> {
-    let schema = get_schema(&topic, &settings).await?;
-    match schema {
-        Schema::Record(record) => {
-            let (array_types, map_types) = TypeMapping::new(&record)?;
-            Ok(Decoder {
-                array_types,
-                map_types,
-                schema: Schema::Record(record),
-                settings: settings,
-            })
-        }
-        _ => Err(anyhow!("avro schema root must be a record")),
-    }
-}
 impl Decoder {
     fn avro2ch(&self, column_name: &str, v: Value) -> Result<CHValue, anyhow::Error> {
         match v {
@@ -175,10 +104,65 @@ impl super::Decoder for Decoder {
             _ => return Err(anyhow!("avro message must be a record")),
         };
         for (column, value) in record {
+            if let Some(excl) = &self.settings.exclude_fields {
+                if excl.iter().any(|c| c == column.as_str()) {
+                    continue;
+                }
+            }
+            if let Some(incl) = &self.settings.include_fields {
+                if !incl.iter().any(|c| c == column.as_str()) {
+                    continue;
+                }
+            }
             let v = self.avro2ch(&column, value)?;
-            row.push((column, v));
+            let column_name = match &self.settings.field_names {
+                None => column,
+                Some(mapping) => match mapping.get(&column) {
+                    None => column,
+                    Some(c) => c.clone(),
+                },
+            };
+            row.push((column_name, v));
         }
         Ok(row)
+    }
+}
+
+impl TypeMapping {
+    fn new(r: &RecordSchema) -> Result<(Self, Self)> {
+        let mut map_types: Vec<(String, &SqlType)> = Vec::new();
+        let mut arr_types: Vec<(String, &SqlType)> = Vec::new();
+        for field in &r.fields {
+            match &field.schema {
+                Schema::Array(v) => arr_types.push((field.name.clone(), get_pod_sqltype(v)?)),
+                Schema::Map(v) => map_types.push((field.name.clone(), get_pod_sqltype(v)?)),
+                _ => (),
+            };
+        }
+        Ok((TypeMapping(arr_types), TypeMapping(map_types)))
+    }
+
+    fn get_type(&self, column: &str) -> Option<&'static SqlType> {
+        match self.0.iter().find(|x| x.0 == column) {
+            None => None,
+            Some((_, t)) => Some(t),
+        }
+    }
+}
+
+pub async fn new(topic: &str, settings: Settings) -> Result<Decoder> {
+    let schema = get_schema(&topic, &settings).await?;
+    match schema {
+        Schema::Record(record) => {
+            let (array_types, map_types) = TypeMapping::new(&record)?;
+            Ok(Decoder {
+                array_types,
+                map_types,
+                schema: Schema::Record(record),
+                settings: settings,
+            })
+        }
+        _ => Err(anyhow!("avro schema root must be a record")),
     }
 }
 
@@ -200,5 +184,40 @@ pub async fn get_schema(topic: &str, settings: &Settings) -> Result<Schema> {
                 }
             }
         },
+    }
+}
+
+fn get_pod_sqltype(s: &Schema) -> Result<&'static SqlType> {
+    match s {
+        Schema::Boolean => Ok(&SqlType::Bool),
+        Schema::Int => Ok(&SqlType::Int32),
+        Schema::Long => Ok(&SqlType::Int64),
+        Schema::Float => Ok(&SqlType::Float32),
+        Schema::Double => Ok(&SqlType::Float64),
+        Schema::Bytes => Ok(&SqlType::String),
+        Schema::String => Ok(&SqlType::String),
+        Schema::Uuid => Ok(&SqlType::Uuid),
+        //Schema::Fixed(s) => Ok(&SqlType::FixedString(s.size)),
+        Schema::Date => Ok(&SqlType::Date),
+        Schema::TimeMillis => Ok(&SqlType::Int32),
+        Schema::TimeMicros => Ok(&SqlType::Int64),
+        Schema::TimestampMillis => Ok(&SqlType::DateTime(DateTimeType::DateTime64(
+            3,
+            chrono_tz::UTC,
+        ))),
+        Schema::TimestampMicros => Ok(&SqlType::DateTime(DateTimeType::DateTime64(
+            6,
+            chrono_tz::UTC,
+        ))),
+        Schema::LocalTimestampMillis => Ok(&SqlType::DateTime(DateTimeType::DateTime64(
+            3,
+            chrono_tz::UTC,
+        ))),
+        Schema::LocalTimestampMicros => Ok(&SqlType::DateTime(DateTimeType::DateTime64(
+            6,
+            chrono_tz::UTC,
+        ))),
+        Schema::Duration => Ok(&SqlType::Int64),
+        _ => Err(anyhow!("unsupported type")),
     }
 }
