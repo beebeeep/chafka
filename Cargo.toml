@@ -2,8 +2,11 @@
 name = "chafka"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "Extensible service for real-time data ingestion from Kafka to ClickHouse"
+readme = "README.md"
+repository = "https://github.com/beebeeep/chafka/"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = "1.0.81"
