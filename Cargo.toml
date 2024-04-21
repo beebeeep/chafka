@@ -7,6 +7,9 @@ description = "Extensible service for real-time data ingestion from Kafka to Cli
 readme = "README.md"
 repository = "https://github.com/beebeeep/chafka/"
 
+[[bin]]
+path = "src/main.rs"
+name = "chafka"
 
 [dependencies]
 anyhow = "1.0.81"
