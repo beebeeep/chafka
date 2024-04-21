@@ -32,7 +32,7 @@ ingestion process either for throughput or for latency.
 
 Delivery and consistency guarantees
 ===================================
-The baseline is "at least once" semantics - message offset will not be committed unless CH confirmed the successsul INSERT. However, keep in mind that reality is a bit more complex: written data still may be lost even after confirmation in case of disk problems or catastrophic failure of server with CH itself. There are few ways to improve durability:
+The baseline is "at least once" semantics - message offset will not be committed unless CH confirmed the successful INSERT. However, keep in mind that reality is a bit more complex: written data still may be lost even after confirmation in case of disk problems or catastrophic failure of server with CH itself. There are few ways to improve durability:
 * Use [replicated tables](https://clickhouse.com/docs/en/engines/table-engines/mergetree-family/replication) (ReplicatedMergeTree etc)
 * Enable more meticulous fsync in MergeTree settings:
     ```xml
