@@ -17,7 +17,7 @@ use crate::{
     settings,
 };
 
-const CH_BACKOFF: std::time::Duration = Duration::from_secs(1);
+const CH_BACKOFF: std::time::Duration = Duration::from_secs(5);
 
 pub struct Ingester {
     batch: Vec<Row>,

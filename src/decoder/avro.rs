@@ -4,12 +4,13 @@ use anyhow::{anyhow, Result};
 
 use apache_avro::{from_avro_datum, schema::RecordSchema, types::Value, Schema};
 use chrono::DateTime;
-use chrono_tz;
+use chrono_tz::{self};
 
 use clickhouse_rs::types::{DateTimeType, SqlType, Value as CHValue};
 use reqwest::Url;
 use schema_registry_api::{SchemaRegistry, SchemaVersion, SubjectName};
 use serde::Deserialize;
+use uuid::Uuid;
 
 use super::{Row, CONFLUENT_HEADER_LEN};
 
@@ -26,11 +27,14 @@ pub struct Decoder {
     schema: Schema,
     array_types: TypeMapping,
     map_types: TypeMapping,
-    settings: Settings,
     name_overrides: Vec<(String, String)>,
+    include_fields: Vec<String>,
+    exclude_fields: Vec<String>,
+    null_values: NullValues,
 }
 
 struct TypeMapping(Vec<(String, &'static SqlType)>);
+struct NullValues(Vec<(String, CHValue)>);
 
 impl Decoder {
     fn avro2ch(&self, column_name: &str, v: Value) -> Result<CHValue, anyhow::Error> {
@@ -46,7 +50,13 @@ impl Decoder {
             Value::String(x) => Ok(CHValue::from(x)),
             Value::Fixed(_, x) => Ok(CHValue::String(Arc::new(x))),
             Value::Enum(_, y) => Ok(CHValue::from(y)),
-            Value::Union(_, _) => todo!("nullables not implemented"),
+            Value::Union(_, v) => match *v {
+                Value::Null => match self.null_values.0.iter().find(|(n, _)| column_name.eq(n)) {
+                    None => Err(anyhow!("cannot find nullable field {}", column_name)),
+                    Some(x) => Ok(x.1.clone()),
+                },
+                v => self.avro2ch(column_name, v),
+            },
             Value::Array(x) => {
                 let mut arr: Vec<CHValue> = Vec::new();
                 for elem in x {
@@ -105,15 +115,13 @@ impl super::Decoder for Decoder {
             _ => return Err(anyhow!("avro message must be a record")),
         };
         for (column, value) in record {
-            if let Some(excl) = &self.settings.exclude_fields {
-                if excl.iter().any(|c| c == column.as_str()) {
-                    continue;
-                }
+            if self.exclude_fields.iter().any(|c| c == column.as_str()) {
+                continue;
             }
-            if let Some(incl) = &self.settings.include_fields {
-                if !incl.iter().any(|c| c == column.as_str()) {
-                    continue;
-                }
+            if !self.include_fields.is_empty()
+                && !self.include_fields.iter().any(|c| c == column.as_str())
+            {
+                continue;
             }
             let v = self.avro2ch(&column, value)?;
             let column_name = match self.name_overrides.iter().find(|m| m.0 == column) {
@@ -132,8 +140,8 @@ impl TypeMapping {
         let mut arr_types: Vec<(String, &SqlType)> = Vec::new();
         for field in &r.fields {
             match &field.schema {
-                Schema::Array(v) => arr_types.push((field.name.clone(), get_pod_sqltype(v)?)),
-                Schema::Map(v) => map_types.push((field.name.clone(), get_pod_sqltype(v)?)),
+                Schema::Array(v) => arr_types.push((field.name.clone(), get_schema_type(v)?.0)),
+                Schema::Map(v) => map_types.push((field.name.clone(), get_schema_type(v)?.0)),
                 _ => (),
             };
         }
@@ -151,27 +159,37 @@ impl TypeMapping {
 pub async fn new(topic: &str, settings: Settings) -> Result<Decoder> {
     let schema = get_schema(&topic, &settings).await?;
     let mut name_overrides: Vec<(String, String)> = Vec::new();
-    if let Some(names) = &settings.field_names {
+    let mut include_fields: Vec<String> = Vec::new();
+    let mut exclude_fields: Vec<String> = Vec::new();
+    if let Some(names) = settings.field_names {
         names
             .iter()
             .for_each(|(k, v)| name_overrides.push((k.to_owned(), v.to_owned())));
     }
+    if let Some(flds) = settings.include_fields {
+        flds.iter().for_each(|e| include_fields.push(e.to_owned()));
+    }
+    if let Some(flds) = settings.exclude_fields {
+        flds.iter().for_each(|e| exclude_fields.push(e.to_owned()));
+    }
     match schema {
         Schema::Record(record) => {
-            let (array_types, map_types) = TypeMapping::new(&record)?;
+            let (array_types, map_types, null_values) = analyze_schema(&record)?;
             Ok(Decoder {
                 array_types,
                 map_types,
                 schema: Schema::Record(record),
-                settings: settings,
                 name_overrides,
+                include_fields,
+                exclude_fields,
+                null_values,
             })
         }
         _ => Err(anyhow!("avro schema root must be a record")),
     }
 }
 
-pub async fn get_schema(topic: &str, settings: &Settings) -> Result<Schema> {
+async fn get_schema(topic: &str, settings: &Settings) -> Result<Schema> {
     match &settings.schema_file {
         Some(f) => Ok(Schema::parse_str(&fs::read_to_string(f)?)?),
         None => match &settings.registry_url {
@@ -192,37 +210,77 @@ pub async fn get_schema(topic: &str, settings: &Settings) -> Result<Schema> {
     }
 }
 
-fn get_pod_sqltype(s: &Schema) -> Result<&'static SqlType> {
+/// checks schema for compatibility and returns type mappings for arrays and maps,
+/// as well as mapping of nullable fields to its zero values
+fn analyze_schema(s: &RecordSchema) -> Result<(TypeMapping, TypeMapping, NullValues)> {
+    let (array_types, map_types) = TypeMapping::new(s)?;
+    let mut null_values: Vec<(String, CHValue)> = Vec::new();
+    for fld in &s.fields {
+        match &fld.schema {
+            Schema::Record(_) => {
+                return Err(anyhow!(
+                    "field {}: nested records are not supported",
+                    fld.name
+                ))
+            }
+            Schema::Union(union) => {
+                let schemas = union.variants();
+                if schemas.len() != 2 {
+                    return Err(anyhow!(
+                        "field {}: only supported union type is [null, <type>]",
+                        fld.name
+                    ));
+                }
+                match schemas[0] {
+                    Schema::Null => (),
+                    _ => {
+                        return Err(anyhow!(
+                            "field {}: only supported union type is [null, <type>]",
+                            fld.name
+                        ))
+                    }
+                }
+                null_values.push((fld.name.clone(), get_schema_type(&schemas[1])?.1))
+            }
+            _ => (),
+        }
+    }
+    Ok((array_types, map_types, NullValues(null_values)))
+}
+
+/// translates avro type into clickhouse type
+/// and returns relevant SqlType and its zero value
+fn get_schema_type(s: &Schema) -> Result<(&'static SqlType, CHValue)> {
     match s {
-        Schema::Boolean => Ok(&SqlType::Bool),
-        Schema::Int => Ok(&SqlType::Int32),
-        Schema::Long => Ok(&SqlType::Int64),
-        Schema::Float => Ok(&SqlType::Float32),
-        Schema::Double => Ok(&SqlType::Float64),
-        Schema::Bytes => Ok(&SqlType::String),
-        Schema::String => Ok(&SqlType::String),
-        Schema::Uuid => Ok(&SqlType::Uuid),
-        //Schema::Fixed(s) => Ok(&SqlType::FixedString(s.size)),
-        Schema::Date => Ok(&SqlType::Date),
-        Schema::TimeMillis => Ok(&SqlType::Int32),
-        Schema::TimeMicros => Ok(&SqlType::Int64),
-        Schema::TimestampMillis => Ok(&SqlType::DateTime(DateTimeType::DateTime64(
-            3,
-            chrono_tz::UTC,
-        ))),
-        Schema::TimestampMicros => Ok(&SqlType::DateTime(DateTimeType::DateTime64(
-            6,
-            chrono_tz::UTC,
-        ))),
-        Schema::LocalTimestampMillis => Ok(&SqlType::DateTime(DateTimeType::DateTime64(
-            3,
-            chrono_tz::UTC,
-        ))),
-        Schema::LocalTimestampMicros => Ok(&SqlType::DateTime(DateTimeType::DateTime64(
-            6,
-            chrono_tz::UTC,
-        ))),
-        Schema::Duration => Ok(&SqlType::Int64),
+        Schema::Boolean => Ok((&SqlType::Bool, CHValue::from(false))),
+        Schema::Int => Ok((&SqlType::Int32, CHValue::Int32(0))),
+        Schema::Long => Ok((&SqlType::Int64, CHValue::Int64(0))),
+        Schema::Float => Ok((&SqlType::Float32, CHValue::Float32(0.0))),
+        Schema::Double => Ok((&SqlType::Float64, CHValue::Float64(0.0))),
+        Schema::Bytes => Ok((&SqlType::String, CHValue::from(Vec::<u8>::new()))),
+        Schema::String => Ok((&SqlType::String, CHValue::from(String::new()))),
+        Schema::Uuid => Ok((&SqlType::Uuid, CHValue::from(Uuid::nil()))),
+        //Schema::Fixed(s) => Ok((&SqlType::FixedString(s.size))),
+        Schema::Date => Ok((&SqlType::Date, CHValue::Date(0u16))),
+        Schema::TimeMillis => Ok((&SqlType::Int32, CHValue::DateTime(0, chrono_tz::UTC))),
+        Schema::TimeMicros => Ok((&SqlType::Int32, CHValue::DateTime(0, chrono_tz::UTC))),
+        Schema::TimestampMillis => Ok((
+            &SqlType::DateTime(DateTimeType::DateTime64(3, chrono_tz::UTC)),
+            CHValue::DateTime64(0, (3, chrono_tz::UTC)),
+        )),
+        Schema::TimestampMicros => Ok((
+            &SqlType::DateTime(DateTimeType::DateTime64(6, chrono_tz::UTC)),
+            CHValue::DateTime64(0, (6, chrono_tz::UTC)),
+        )),
+        Schema::LocalTimestampMillis => Ok((
+            &SqlType::DateTime(DateTimeType::DateTime64(3, chrono_tz::UTC)),
+            CHValue::DateTime64(0, (3, chrono_tz::UTC)),
+        )),
+        Schema::LocalTimestampMicros => Ok((
+            &SqlType::DateTime(DateTimeType::DateTime64(6, chrono_tz::UTC)),
+            CHValue::DateTime64(0, (6, chrono_tz::UTC)),
+        )),
+        Schema::Duration => Ok((&SqlType::Int64, CHValue::UInt64(0))),
         _ => Err(anyhow!("unsupported type")),
     }
 }

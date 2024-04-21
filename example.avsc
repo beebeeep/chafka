@@ -17,6 +17,13 @@
         "type": "array",
         "items": "int"
       }
+    },
+    {
+      "name": "d",
+      "type": [
+        "null",
+        "string"
+      ]
     }
   ]
 }
