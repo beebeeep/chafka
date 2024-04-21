@@ -1,3 +1,5 @@
+//! example implementation of Decoder trait:
+//! deserialize simple JSON-encoded structure
 use clickhouse_rs::types::Value;
 use serde::Deserialize;
 use uuid::Uuid;
@@ -6,6 +8,7 @@ use super::Row;
 
 pub struct Decoder;
 
+/// message serialized in Kafka
 #[derive(Deserialize)]
 struct Entry {
     pub key: Uuid,

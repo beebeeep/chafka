@@ -1,3 +1,4 @@
+//! Consumes messages from Kafka, and inserts decoded rows to CH
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -56,6 +57,7 @@ impl Ingester {
         })
     }
 
+    /// subscribe to topic and start ingestion process
     pub async fn start(&mut self) {
         let mut count: usize = 0;
         let mut start = Instant::now();

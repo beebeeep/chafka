@@ -1,3 +1,15 @@
+//! generic avro message decoder.
+//!
+//! Takes schema either from configured file, or from [Schema Registry]
+//! using Confluent-compatible message [header].
+//!
+//! Supports all primitive types, maps and arrays of primitive types, nullable values,
+//! and most of the logical types, like timestamps, UUIDs etc.
+//! Union types other than nullables, nested records, and decimals are not supported.
+//! All time types are assumed to be in UTC timezone.
+//!
+//! [Schema Registry]: https://docs.confluent.io/platform/current/schema-registry/index.html
+//! [header]: https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format
 use std::{collections::HashMap, fs, io::BufReader, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Result};

@@ -1,23 +1,35 @@
+//! Application config
 use std::collections::HashMap;
 
 use config::{Config, ConfigError, File};
 use serde::Deserialize;
 
+/// configuration of single topic ingester
 #[derive(Deserialize)]
 pub struct Ingester {
+    /// name of decoder to use
     pub decoder: String,
+    /// address of bootstrap kafka broker
     pub kafka_broker: String,
+    /// topic to ingest
     pub topic: String,
+    /// consumer group to use (default: use ingester's name)
     pub consumer_group: Option<String>,
+    /// max ClickHouse insert batch size (default: 1000)
     pub batch_size: Option<usize>,
+    /// batching timeout (default: 10s)
     pub batch_timeout_seconds: Option<u64>,
+    /// URL of ClickHouse
     pub clickhouse_url: String,
+    /// ClickHouse table to ingest into
     pub clickhouse_table: String,
+    /// Decoder-specific configuration
     pub custom: Option<toml::Value>,
 }
 
 #[derive(Deserialize)]
 pub struct Settings {
+    /// Map of ingester names and settings
     pub ingesters: HashMap<String, Ingester>,
 }
 

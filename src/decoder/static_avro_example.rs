@@ -1,3 +1,4 @@
+//! example implementation of statically-typed avro decoder
 use std::io::BufReader;
 
 use apache_avro::{from_avro_datum, from_value, Schema};
